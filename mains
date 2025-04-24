@@ -654,7 +654,7 @@ class_grid = np.empty((num_vals_a, num_vals_e), dtype=object)
 
 def simulation_job(params):
     i, j, a_val, e_val = params
-    classification = run_simulation(5, a_val, e_val)
+    classification = run_simulation(100000, a_val, e_val)
     return (i, j, classification)
 
 
