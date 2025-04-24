@@ -57,7 +57,7 @@ def trapz_nb(y, x):
     """
     n = len(x)
     result = 0.0
-    for i in range(1, n):
+    for i in prange(1, n):
         dx = x[i] - x[i-1]
         result += 0.5 * (y[i] + y[i-1]) * dx
     return result
@@ -283,7 +283,7 @@ def solve_T_d(T_star, ap, r_star, r, tol=1e-6, max_iter=50):
     # Initial guess near 300K
     T_d = 160
 
-    for _ in range(max_iter):
+    for _ in prange(max_iter):
 
         # f(T_d) = T_d^4 + (T_d - 100)^4 - 2 * T_star^4 * ((1 - ap) * r_star^2 / r^2)
         f_val = T_d**4 + (T_d - 100)**4 - 2 * T_star**4 * ((1 - ap) * r_star**2 / r**2)
@@ -412,7 +412,7 @@ def EBM(L, lat, T, m_planet, a_moon, m_star, planet_center, moon_center, star_ce
     N = len(lat)
     x = np.sin(lat)
     T_new = T.copy()
-    for i in range(1, N-1):
+    for i in prange(1, N-1):
         dTdx_ip = (T[i+1] - T[i]) / delta_x
         dTdx_im = (T[i] - T[i-1]) / delta_x
         x_ip_half = 0.5 * (x[i+1] + x[i])
@@ -529,9 +529,9 @@ def run_simulation(time_yr, a_moon_input, e_moon_input):
 
 
         #
-        C_array = np.array([atmospheric_heat_capacity(T_current[i], lat) for i in range(N)])
-        D_array = np.array([diffusion_simple(T_current[i], moon_center, star_center, epsilon, lat[i], lat, phi_m, phi_peri, n) for i in range(N)])
-        #D_array = np.array([diffusion_complex(T_current[i], moon_center, star_center, epsilon, n, lat[i], phi_m, phi_peri) for i in range(N)])
+        C_array = np.array([atmospheric_heat_capacity(T_current[i], lat) for i in prange(N)])
+        D_array = np.array([diffusion_simple(T_current[i], moon_center, star_center, epsilon, lat[i], lat, phi_m, phi_peri, n) for i in prange(N)])
+        #D_array = np.array([diffusion_complex(T_current[i], moon_center, star_center, epsilon, n, lat[i], phi_m, phi_peri) for i in prange(N)])
 
         dt_max = np.min((delta_x**2 * C_array) / (2 * D_array * (1 - x**2) + 1e-10))
         #if transit(planet_center, moon_center, star_center, r_planet):
@@ -580,7 +580,7 @@ def run_simulation(time_yr, a_moon_input, e_moon_input):
 
     j_profiles = np.where((T_profiles > 273) & (T_profiles < 373), 1, 0)
     weights = np.cos(lat)
-    j_time = np.array([0.5 * np.trapezoid(j_profiles[i, :] * weights, lat) for i in range(j_profiles.shape[0])])
+    j_time = np.array([0.5 * np.trapezoid(j_profiles[i, :] * weights, lat) for i in prange(j_profiles.shape[0])])
 
     times_years = times_arr / YEAR_to_s
     final_10_years = time_yr / 10
@@ -588,7 +588,7 @@ def run_simulation(time_yr, a_moon_input, e_moon_input):
     xi_avg = np.mean(j_time[final_indices])
     xi_std = np.std(j_time[final_indices], ddof=1)
 
-    T_lat_avg = np.array([np.trapezoid(T_profiles[i, :] * weights, lat) / 2 for i in range(T_profiles.shape[0])])
+    T_lat_avg = np.array([np.trapezoid(T_profiles[i, :] * weights, lat) / 2 for i in prange(T_profiles.shape[0])])
     T_avg = np.mean(T_lat_avg[final_indices])
     T_avg_list = []
     T_avg_list.append(T_avg)
@@ -659,8 +659,8 @@ def simulation_job(params):
 
 
 param_list = []
-for i in range(num_vals_a):
-    for j in range(num_vals_e):
+for i in prange(num_vals_a):
+    for j in prange(num_vals_e):
         param_list.append((i, j, a_moon_values[i], e_moon_values[j]))
 
 
@@ -682,8 +682,8 @@ custom_colors = ['green', 'grey', 'red', 'blue', 'black']
 
 plt.figure(figsize=(8,6))
 # Use the correct dimension variables for the grid
-for i in range(num_vals_a):
-    for j in range(num_vals_e):
+for i in prange(num_vals_a):
+    for j in prange(num_vals_e):
         x_val = a_moon_fraction[i]
         y_val = e_moon_values[j]
         color_val = custom_colors[numeric_grid[i, j]]
@@ -746,8 +746,8 @@ plt.show()
 # 4. (Optional) Overlay your discrete classification markers
 plt.figure(figsize=(8,6))
 plt.pcolormesh(A_mesh, E_mesh, xi_grid, shading='auto', cmap='viridis')
-for i in range(num_vals_a):
-    for j in range(num_vals_e):
+for i in prange(num_vals_a):
+    for j in prange(num_vals_e):
         plt.scatter(
             A_frac[i], E_vals[j],
             color=custom_colors[numeric_grid[i, j]],
