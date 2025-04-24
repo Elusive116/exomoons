@@ -1,0 +1,762 @@
+#used from binary stars
+
+
+
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import rebound
+import reboundx
+import matplotlib.colors as mcolors
+from scipy.optimize import fsolve
+import concurrent.futures
+from matplotlib.colors import ListedColormap
+import matplotlib.patches as mpatches
+from numba import njit, jit, objmode
+
+
+# Constants for unit conversion
+YEAR_to_s = 3.15576e7         # seconds per year
+AU_to_cm   = 1.495978707e13   # centimeters per AU
+Msun_to_g  = 1.989e33          # grams per solar mass
+
+
+# Define grid in latitude (in radians)
+N = 18
+lat = np.linspace(-np.pi/2, np.pi/2, N)
+delta_x = 2 / (N - 1)
+# Initial temperature profile (uniform 323 K)
+T_profile = np.ones(N) * 323
+
+
+# --- Helper function for clipping (Numba-compatible) ---
+@njit
+def clip_nb(a, a_min, a_max):
+    if a < a_min:
+        return a_min
+    elif a > a_max:
+        return a_max
+    else:
+        return a
+
+
+@njit
+def trapz_nb(y, x):
+    """
+    Compute the integral of y with respect to x using the trapezoidal rule.
+
+    Parameters:
+      y : 1D array of function values.
+      x : 1D array of x-coordinates (must be the same length as y).
+
+    Returns:
+      The approximate integral as a float.
+    """
+    n = len(x)
+    result = 0.0
+    for i in range(1, n):
+        dx = x[i] - x[i-1]
+        result += 0.5 * (y[i] + y[i-1]) * dx
+    return result
+
+
+@njit
+def atmospheric_heat_capacity(T_i, lat):
+    """
+    Compute the atmospheric heat capacity given a temperature T_i.
+    """
+    Cl = 5.25e9
+    Co = 40 * Cl
+    if T_i > 273:
+        Ci = 0
+    elif T_i < 263:
+        Ci = 2 * Cl
+    else:
+        Ci = 9.2 * Cl
+    fo = 0.7
+    fl = 1 - fo
+
+    fi = np.maximum(0, 1 - np.exp((T_i - 273) / 10))
+    C = fl * Cl + fo * ((1 - fi) * Co + fi * Ci)
+    return C
+
+
+@njit
+def albedo_simple(T):
+    return 0.34 - 0.136*np.tanh( ( T - 268) / 5)
+
+@njit
+def tau_ir(T):
+    return 0.79 * (T / 273) ** 3
+
+@njit
+def infrared_simple(T):
+    sig_sf = 5.670374419e-5
+    tau_i = tau_ir(T)
+    return sig_sf * T ** 4 / (1 + 0.75 * tau_i)
+
+@njit
+def diffusion_simple(T, moon_center, star_center, epsilon, lat_value, lat, phi_m, phi_peri, n):
+    """
+    Calculate the diffusion constant D for heat transfer.
+    """
+
+    G_cgs = 6.67430e-8
+    w_d = n
+    w_do = 7.29e-5
+    D = 5.394e2 * (w_d / w_do)**(-2)
+    return D
+
+
+@njit
+def albedo_complex(T, moon_center, star_center, epsilon, lat_value, t, Pmoon, lat, phi_m):
+    """
+    Calculate the albedo based on temperature and geometric factors.
+    """
+    mu = mu_calc(moon_center, star_center, epsilon, lat_value, t, Pmoon)
+    Z = np.degrees(np.arccos(clip_nb(mu, -1, 1)))
+
+    # Tuned parameters for albedo calculation
+    alpha = -0.07         # Dimensionless
+    beta = 8e-3           # In (deg)^-1
+    ac0 = 0.19            # Minimum cloud albedo at low zenith angles
+    ac = max(ac0, (alpha + beta * Z))
+
+    fo = 0.7
+    fl = 1 - fo
+
+    fi = np.maximum(0, 1 - np.exp((T - 273) / 10))
+
+    al_val = 0.2
+    ao = 0.026 / (1.1 * mu**1.7 + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1.0)
+    ail = 0.85
+    aio = 0.62
+    fcw = 0.67
+    fcl = 0.5
+    fci = 0.5
+
+    a_s = (fo * ((1 - fi) * (ao * (1 - fcw) + ac * fcw) +
+           fi * (aio * (1 - fci) + ac * fci)) +
+           fl * ((1 - fi) * (al_val * (1 - fcl) + ac * fcl) +
+           fi * (ail * (1 - fci) + ac * fci)))
+    return a_s
+
+
+@njit
+def Pressure_co2(T):
+    """
+    Determine the CO2 pressure based on temperature.
+    """
+    if T >= 290:
+        P_co2 = 3.3e-4 * 1e6
+    elif T <= 250:
+        P_co2 = 1e-2 * 1e6
+    else:
+        P_co2 = 10**(-2 - (T - 250) / 27) * 1e6
+    return P_co2
+
+
+@njit
+def mu_calc(moon_center, star_center, epsilon, lat_value, t, Pmoon, phi_m):
+    """
+    Calculate the cosine of the stellar zenith angle (mu) for the exomoon.
+    """
+
+
+    phi_a = 0
+    delta_0 = epsilon * np.pi / 180
+    sin_delta = -1 * np.sin(delta_0) * np.cos(phi_m - phi_peri - phi_a)
+    delta = np.arcsin(sin_delta)
+
+    local_time_fraction = (t % Pmoon) / Pmoon
+    h = 2 * np.pi * local_time_fraction - np.pi
+    mu_eff = np.sin(lat_value) * np.sin(delta) + np.cos(lat_value) * np.cos(delta) * np.cos(h)
+    mu = clip_nb(mu_eff, 0, 1)
+    return mu
+
+
+@njit
+def mu_bar_stellar(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri):
+    """
+    Calculate the average stellar cosine incidence (mu_bar) for a given latitude.
+    """
+    r_moon = moon_center - star_center
+    phi_a = 0
+    delta_0 = epsilon * np.pi / 180
+    sin_delta = -1 * np.sin(delta_0) * np.cos(phi_m - phi_peri - phi_a)
+    delta = np.arcsin(sin_delta)
+    cos_H = -1 * np.tan(lat_value) * np.tan(delta)
+    cos_H = clip_nb(cos_H, -1, 1)
+    H = np.arccos(cos_H)
+    if H <= 0:
+        mubar = 0
+    else:
+        mubar = (np.sin(lat_value) * np.sin(delta) +
+                 np.cos(lat_value) * np.cos(delta) * np.sin(H) / H)
+    mubar_timesH = mubar * H
+    return mubar_timesH
+
+
+@njit
+def mu_bar_diffuse(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri):
+    """
+    Calculate the diffuse average mu_bar for the exomoon.
+    """
+    r_moon = moon_center - star_center
+    phi_a = 0
+    delta_0 = epsilon * np.pi / 180
+    sin_delta = -1 * np.sin(delta_0) * np.cos(phi_m - phi_peri - phi_a)
+    delta = np.arcsin(sin_delta)
+    cos_H = -1 * np.tan(lat_value) * np.tan(delta)
+    cos_H = clip_nb(cos_H, -1, 1)
+    H = np.arccos(cos_H)
+    if H <= 0:
+        mubar = 0
+    else:
+        mubar = (np.sin(lat_value) * np.sin(delta) +
+                 np.cos(lat_value) * np.cos(delta) * np.sin(H) / H)
+    return mubar
+
+
+
+@njit
+def diffusion_complex(T, moon_center, star_center, epsilon, n, lat_value, phi_m, phi_peri):
+    """
+    Calculate the diffusion constant D for heat transfer.
+    """
+    P_co2 = Pressure_co2(T)
+    P_co2o = 3.3e-4 * 1e6
+    G_cgs = 6.67430e-8
+    w_d = n
+    w_do = 7.2921150e-5
+    mubar = mu_bar_diffuse(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri)
+    D = 5.394e2 * (w_d / w_do)**(-2) * (P_co2 / P_co2o)
+    return D
+
+
+@njit
+def transit(planet_center, moon_center, star_center, r_p):
+    s = planet_center - moon_center
+    s_s = star_center - moon_center
+    s_unit = s / np.linalg.norm(s)
+    s_s_unit = s_s / np.linalg.norm(s_s)
+    alpha = np.arccos(np.dot(s_unit, s_s_unit))
+    d = np.linalg.norm(s_s) * np.sin(alpha)
+    if d < r_p:
+        return True
+    else:
+
+        return False
+
+
+@njit
+def transit_times(planet_center, moon_center, star_center, r_p):
+    s = planet_center - moon_center
+    s_s = star_center - moon_center
+    s_unit = s / np.linalg.norm(s)
+    s_s_unit = s_s / np.linalg.norm(s_s)
+    alpha = np.arccos(np.dot(s_unit, s_s_unit))
+    d = np.linalg.norm(s_s) * np.sin(alpha)
+    return d
+
+
+@njit
+def stellar_insolation_flux(L, m_s, planet_center, moon_center, star_center, r_p, lat_value, epsilon, phi_m, phi_peri):
+    """
+    Calculate the stellar insolation flux on the moon's surface.
+    """
+    if transit(planet_center, moon_center, star_center, r_p):
+        S = 0
+    else:
+        d = np.linalg.norm(moon_center - star_center)
+        F = L / (4 * np.pi * d ** 2)
+        mubar_timesH = mu_bar_stellar(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri)
+        S = (F / np.pi) * mubar_timesH
+    return S
+
+
+@njit
+def solve_T_d(T_star, ap, r_star, r, tol=1e-6, max_iter=50):
+    # Initial guess near 300K
+    T_d = 160
+
+    for _ in range(max_iter):
+
+        # f(T_d) = T_d^4 + (T_d - 100)^4 - 2 * T_star^4 * ((1 - ap) * r_star^2 / r^2)
+        f_val = T_d**4 + (T_d - 100)**4 - 2 * T_star**4 * ((1 - ap) * r_star**2 / r**2)
+
+        # f'(T_d) = 4*T_d^3 + 4*(T_d - 100)^3
+        f_prime = 4 * T_d**3 + 4 * (T_d - 100)**3
+
+        # Newton update
+        T_d_new = T_d - f_val / f_prime
+
+        if abs(T_d_new - T_d) < tol:
+            return T_d_new
+
+        T_d = T_d_new
+    return T_d  # Return final value if tolerance not reached
+
+
+# Example usage within planetary_illumination:
+@njit
+def planetary_illumination(moon_center, planet_center, star_center, r_star, a_moon, lat_value,
+                           r_planet, m_star, t, t0, a_planet, e_planet, Pplanet, V_star, L):
+
+    s = planet_center - moon_center
+    r = np.linalg.norm(star_center - planet_center)
+
+    phi = 2 * np.arctan(s[1] / (s[0] + np.sqrt(s[0]**2 + s[1]**2)))
+    v = np.pi / 2 - np.arccos(s[1] / np.linalg.norm(s))
+
+    sig_sf = 5.670374419e-5
+    ap = 0.3 * 0.8
+
+
+    #T_star = (L / (4 * np.pi * sig_sf * r_star**2))**0.25
+
+    frac = 0.5 * (1 + np.cos(v) * np.cos(phi - V_star))
+
+    # Replace fsolve with the custom Newton method
+    #T_d = solve_T_d(T_star, ap, r_star, r)
+    #T_n = T_d - 100
+    T_d = 73
+    T_n = 73
+
+    f_t = 2 * r_planet**2 * sig_sf / (a_moon)**2 * np.cos(lat_value) * (T_d**4 * frac + T_n**4 * (1 - frac))
+    f_r = 2 * L * (r_planet)**2 * np.pi * ap * np.cos(lat_value) * frac / (4 * np.pi * r**2 * a_moon**2)
+    S_p = f_t + f_r
+    return S_p
+
+
+
+
+@njit
+def infrared_complex(T):
+    T_clipped = T
+    #T_clipped = clip_nb(T, 190, 380)
+    P_co2o = 3.3e-4 * 1e6
+    P_co2 = Pressure_co2(T_clipped)
+    beta = np.log10(P_co2 / P_co2o)
+    I = (9.468980
+         - 7.714727e-5 * beta
+         - 2.794778 * T_clipped
+         - 3.244753e-3 * beta * T_clipped
+         - 3.4547406e-4 * beta**2
+         + 2.212108e-2 * T_clipped**2
+         + 2.229142e-3 * beta**2 * T_clipped
+         + 3.088497e-5 * beta * T_clipped**2
+         - 2.789815e-5 * beta**2 * T_clipped**2
+         - 3.442973e-3 * beta**3
+         - 3.361939e-5 * T_clipped**3
+         + 9.173169e-3 * beta**3 * T_clipped
+         - 7.775195e-5 * beta**3 * T_clipped**2
+         - 1.679112e-7 * beta * T_clipped**3
+         + 6.590999e-8 * beta**2 * T_clipped**3
+         + 1.528125e-7 * beta**3 * T_clipped**3
+         - 3.367567e-2 * beta**4
+         - 1.631909e-4 * beta**4 * T_clipped
+         + 3.663871e-6 * beta**4 * T_clipped**2
+         - 9.255646e-9 * beta**4 * T_clipped**3)
+    return I
+
+@njit
+def tidal_heating_2(r_m, e_m, m_p, a_m):
+  Q = 100
+  k2 = 0.3
+  G_cgs = 6.67430e-8
+
+  tide_L = 21 * k2 * G_cgs * m_p ** 2.5 * r_m ** 5 * e_m ** 2 / (2 * Q * a_m ** (15/2) )
+  tides = tide_L / (4 * np.pi * r_m ** 2)
+  return tides
+
+
+
+@njit
+def tidal_heating(r_m, e_m, m_p, a_m):
+    # 1) Calculate total heating rate in erg/s
+    Q_m = 100
+    gamma = 1e11
+    rho_m = 5  # g/cm^3
+    G_cgs = 6.67430e-8
+    flux = (21 * rho_m * r_m**5 * e_m**2 / (38 * gamma * Q_m)) * (G_cgs * m_p / a_m**3)**2.5
+
+
+
+    return flux
+
+
+
+
+
+
+
+@njit
+def main_sequence_luminosity(m_s):
+    L_sun = 3.846e33
+    L = L_sun * (m_s / Msun_to_g)**4
+    return L
+
+
+
+
+
+
+@njit
+def EBM(L, lat, T, m_planet, a_moon, m_star, planet_center, moon_center, star_center,
+        r_planet, delta_x, e_moon, dt, epsilon, t, Pmoon, r_star, t0,
+        a_planet, e_planet, Pplanet, V_star, phi_m, phi_peri, n, r_moon):
+    N = len(lat)
+    x = np.sin(lat)
+    T_new = T.copy()
+    for i in range(1, N-1):
+        dTdx_ip = (T[i+1] - T[i]) / delta_x
+        dTdx_im = (T[i] - T[i-1]) / delta_x
+        x_ip_half = 0.5 * (x[i+1] + x[i])
+        x_im_half = 0.5 * (x[i] + x[i-1])
+        diffusion = ((1 - x_ip_half**2) * dTdx_ip - (1 - x_im_half**2) * dTdx_im) / delta_x
+
+        C_local = atmospheric_heat_capacity(T[i], lat)
+
+        D_local = diffusion_simple(T[i], moon_center, star_center, epsilon, lat[i], lat, phi_m, phi_peri, n)
+        #D_local = diffusion_complex(T[i], moon_center, star_center, epsilon, n, lat[i], phi_m, phi_peri)
+
+        S_local = stellar_insolation_flux(L, m_star, planet_center, moon_center, star_center, r_planet, lat[i], epsilon, phi_m, phi_peri)
+
+
+        #Sp_local = planetary_illumination(moon_center, planet_center, star_center, r_star, a_moon, lat[i], r_planet, m_star, t, t0, a_planet, e_planet, Pplanet, V_star, L)
+
+        A_local = albedo_simple(T[i])
+        #A_local = albedo_complex(T[i], moon_center, star_center, epsilon, lat[i], t, Pmoon, lat, phi_m)
+        #I_local = infrared_complex(T[i])
+        I_local = infrared_simple(T[i])
+
+        tide_flux = tidal_heating(r_moon, e_moon, m_planet, a_moon)
+        #A_local = 0
+        #tide_flux = 0
+        Sp_local = 0
+        T_new[i] = T[i] + (dt / C_local) * ((S_local + Sp_local) * (1 - A_local) - I_local + D_local * diffusion + tide_flux)
+    T_new[0] = T_new[1]
+    T_new[-1] = T_new[-2]
+    return T_new
+
+
+
+
+def run_simulation(time_yr, a_moon_input, e_moon_input):
+    sim = rebound.Simulation()
+    sim.integrator = "ias15"
+    sim.units = ('s', 'cm', 'g')
+    sim.t = 0.0
+
+
+    #rebx = reboundx.Extras(sim)
+    #tides = rebx.load_force('tides_constant_time_lag')
+    #rebx.add_force(tides)
+    #gr = rebx.load_force("gr")
+    #rebx.add_force(gr)
+    #gr.params['c'] = 2.99792458e10
+
+    L = 1.53e32
+
+    m_star = 0.49 * Msun_to_g
+    r_star = 0.0023262363 * AU_to_cm
+
+    m_planet = 0.00078 * Msun_to_g
+    a_planet = 2.35 * AU_to_cm
+    e_planet = 0.06
+    r_planet = 0.0004652473 * AU_to_cm
+    i_planet = 0
+
+    m_moon = 0.000003 * Msun_to_g
+
+    a_moon = a_moon_input
+    e_moon = e_moon_input
+    r_moon = 0.0000418723 * AU_to_cm
+    epsilon = 0
+
+    star = sim.add(m=m_star, x=0, y=0, z=0, vx=0, vy=0, vz=0)
+    planet = sim.add(m=m_planet, a=a_planet, e=e_planet)
+    moon = sim.add(m=m_moon, a=a_moon, e=e_moon, primary=sim.particles[1])
+    sim.move_to_com()
+
+    #sim.particles[2].r = r_moon
+    #sim.particles[2].params['tctl_k2'] = 0.3
+    #sim.particles[2].params['tctl_tau'] = 700
+    #sim.particles[1].r = r_planet
+    #sim.particles[1].params['tctl_k2'] = 0.5
+    #sim.particles[1].params['tctl_tau'] = 0.05
+
+
+    a_values = []
+    e_values = []
+    times_arr = []
+    T_profiles = []
+
+
+    final_time = time_yr * YEAR_to_s
+    current_time = 0.0
+    t0 = 0
+    x = np.sin(lat)
+
+
+    T_current = T_profile.copy()
+
+    Pmoon = 2 * np.pi * np.sqrt((a_moon ** 3) / (6.67430e-8 * m_planet))
+    Pplanet = 2 * np.pi * np.sqrt((a_planet ** 3) / (6.67430e-8 * m_star))
+
+    star_center = np.array([sim.particles[0].x, sim.particles[0].y, sim.particles[0].z])
+    planet_center = np.array([sim.particles[1].x, sim.particles[1].y, sim.particles[1].z])
+    moon_center = np.array([sim.particles[2].x, sim.particles[2].y, sim.particles[2].z])
+
+    orbit = sim.particles[2].orbit(primary=sim.particles[1])
+    planet_orbits = sim.particles[1].orbit(primary=sim.particles[0])
+    star_moon_orbits = sim.particles[2].orbit(primary = sim.particles[0])
+    hill_radius = planet_orbits.rhill
+    V_star = planet_orbits.f
+
+    phi_m = (star_moon_orbits.Omega + star_moon_orbits.omega + star_moon_orbits.f) % (2 * np.pi)
+    phi_peri = (orbit.omega + orbit.Omega) % (2 * np.pi)
+
+
+    n = orbit.n
+
+
+    while current_time < final_time:
+
+
+        #
+        C_array = np.array([atmospheric_heat_capacity(T_current[i], lat) for i in range(N)])
+        D_array = np.array([diffusion_simple(T_current[i], moon_center, star_center, epsilon, lat[i], lat, phi_m, phi_peri, n) for i in range(N)])
+        #D_array = np.array([diffusion_complex(T_current[i], moon_center, star_center, epsilon, n, lat[i], phi_m, phi_peri) for i in range(N)])
+
+        dt_max = np.min((delta_x**2 * C_array) / (2 * D_array * (1 - x**2) + 1e-10))
+        #if transit(planet_center, moon_center, star_center, r_planet):
+         # dt_transit = (6 * 60 * 60) / 10
+         # dt = min(dt_transit, dt_max)
+        #else:
+         # dt = dt_max
+
+
+        dt = dt_max
+
+
+        sim.integrate(sim.t + dt)
+        current_time = sim.t
+        times_arr.append(current_time)
+
+        orbit = sim.particles[2].orbit(primary=sim.particles[1])
+        planet_orbits = sim.particles[1].orbit(primary=sim.particles[0])
+        star_moon_orbits = sim.particles[2].orbit(primary = sim.particles[0])
+
+        v_star = planet_orbits.f
+        phi_m = (star_moon_orbits.Omega + star_moon_orbits.omega + star_moon_orbits.f) % (2 * np.pi)
+        phi_peri = (orbit.omega + orbit.Omega) % (2 * np.pi)
+
+        n = orbit.n
+        a_values.append(orbit.a)
+        e_values.append(orbit.e)
+
+        Pmoon = 2 * np.pi * np.sqrt((a_moon ** 3) / (6.67430e-8 * m_planet))
+        Pplanet = 2 * np.pi * np.sqrt((a_planet ** 3) / (6.67430e-8 * m_star))
+
+        star_center = np.array([sim.particles[0].x, sim.particles[0].y, sim.particles[0].z])
+        planet_center = np.array([sim.particles[1].x, sim.particles[1].y, sim.particles[1].z])
+        moon_center = np.array([sim.particles[2].x, sim.particles[2].y, sim.particles[2].z])
+
+        T_current = EBM(L, lat, T_current, m_planet, a_moon, m_star, planet_center, moon_center, star_center,
+                        r_planet, delta_x, e_moon, dt, epsilon, sim.t, Pmoon, r_star, t0,
+                        a_planet, e_planet, Pplanet, V_star, phi_m, phi_peri, n, r_moon)
+        T_profiles.append(T_current.copy())
+
+    times_arr = np.array(times_arr)
+    a_values = np.array(a_values)
+    a_values_hill = np.array(a_values) / hill_radius
+    e_values = np.array(e_values)
+    T_profiles = np.array(T_profiles)
+
+    j_profiles = np.where((T_profiles > 273) & (T_profiles < 373), 1, 0)
+    weights = np.cos(lat)
+    j_time = np.array([0.5 * np.trapezoid(j_profiles[i, :] * weights, lat) for i in range(j_profiles.shape[0])])
+
+    times_years = times_arr / YEAR_to_s
+    final_10_years = time_yr / 10
+    final_indices = np.where(times_years >= (times_years[-1] - final_10_years))[0]
+    xi_avg = np.mean(j_time[final_indices])
+    xi_std = np.std(j_time[final_indices], ddof=1)
+
+    T_lat_avg = np.array([np.trapezoid(T_profiles[i, :] * weights, lat) / 2 for i in range(T_profiles.shape[0])])
+    T_avg = np.mean(T_lat_avg[final_indices])
+    T_avg_list = []
+    T_avg_list.append(T_avg)
+    T_full_avg = np.mean(T_avg_list)
+    if xi_avg >= 0.1:
+        if xi_std < 0.1 * xi_avg:
+            classification = "Habitable Moon"
+        else:
+            classification = "Transient Moon"
+    else:
+        if T_avg > 373:
+            classification = "Hot Moon"
+        elif T_avg < 273:
+            classification = "Snowball Moon"
+        else:
+            classification = "Unclassified Moon"
+    print(T_full_avg)
+    return classification
+
+
+def get_hill_radius_default():
+    sim = rebound.Simulation()
+    sim.integrator = "ias15"
+    sim.units = ('s','cm','g')
+    sim.t = 0.0
+
+
+    m_star = 0.49 * Msun_to_g
+    r_star = 0.0023262363 * AU_to_cm
+
+    m_planet = 0.00078 * Msun_to_g
+    a_planet = 2.35 * AU_to_cm
+    e_planet = 0.06
+    r_planet = 0.0004652473 * AU_to_cm
+    i_planet = 0
+
+
+    star = sim.add(m=m_star, x=0, y=0, z=0, vx=0, vy=0, vz=0)
+    planet = sim.add(m=m_planet, a=a_planet, e=e_planet)
+
+
+    sim.move_to_com()
+    planet_orbit = sim.particles[1].orbit(primary=sim.particles[0])
+    return planet_orbit.rhill
+
+
+ref_hill = get_hill_radius_default()
+
+
+
+min_frac = 0.05
+max_frac = 0.3
+num_vals_a = 4
+num_vals_e = 4
+
+
+a_moon_values = np.linspace(min_frac, max_frac, num_vals_a) * ref_hill
+e_moon_values = np.linspace(0, 0.09, num_vals_e)
+
+
+class_grid = np.empty((num_vals_a, num_vals_e), dtype=object)
+
+
+def simulation_job(params):
+    i, j, a_val, e_val = params
+    classification = run_simulation(5, a_val, e_val)
+    return (i, j, classification)
+
+
+param_list = []
+for i in range(num_vals_a):
+    for j in range(num_vals_e):
+        param_list.append((i, j, a_moon_values[i], e_moon_values[j]))
+
+
+with concurrent.futures.ProcessPoolExecutor() as executor:
+    results = list(executor.map(simulation_job, param_list))
+
+
+for i, j, classification in results:
+    class_grid[i, j] = classification
+
+
+class_map = {"Habitable Moon": 0, "Transient Moon": 1, "Hot Moon": 2, "Snowball Moon": 3, "Unclassified Moon": 4}
+numeric_grid = np.vectorize(class_map.get)(class_grid)
+a_moon_fraction = a_moon_values / ref_hill
+
+
+custom_colors = ['green', 'grey', 'red', 'blue', 'black']
+
+
+plt.figure(figsize=(8,6))
+# Use the correct dimension variables for the grid
+for i in range(num_vals_a):
+    for j in range(num_vals_e):
+        x_val = a_moon_fraction[i]
+        y_val = e_moon_values[j]
+        color_val = custom_colors[numeric_grid[i, j]]
+        plt.scatter(x_val, y_val, color=color_val,  marker = 's', s=10)
+
+
+
+
+plt.xlabel('a_moon (fraction of Hill Radius)')
+plt.ylabel('e_moon')
+plt.title('Moon Classification over Grid of a_moon and e_moon')
+# Make sure the legend labels match your class_map keys
+legend_patches = [mpatches.Patch(color=custom_colors[i], label=label)
+                  for i, label in enumerate(["Habitable Moon", "Transient Moon", "Hot Moon", "Snowball Moon", "Unclassified Moon"])]
+plt.legend(handles=legend_patches, bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+
+# --------------------------------------------------------------------
+# 1. (Re)build your xi_grid from the results of run_simulation.
+#    This step assumes you modified your simulation_job to return
+#    xi_avg as well as the classification:
+#
+#      def simulation_job(params):
+#          i, j, a_val, e_val = params
+#          classification, xi_avg = run_simulation(5, a_val, e_val)
+#          return (i, j, classification, xi_avg)
+#
+#    and then after collecting `results` you did:
+#
+#      # initialize
+#      xi_grid = np.zeros((num_vals_a, num_vals_e))
+#      for i, j, classification, xi in results:
+#          class_grid[i, j] = classification
+#          xi_grid[i, j]   = xi
+#
+#  If you’ve already done that, proceed to plotting below.
+# --------------------------------------------------------------------
+
+# 2. Build the mesh of semi-major‐axis fraction vs. eccentricity
+A_frac = a_moon_fraction           # shape (num_vals_a,)
+E_vals = e_moon_values             # shape (num_vals_e,)
+A_mesh, E_mesh = np.meshgrid(A_frac, E_vals, indexing='ij')
+
+# 3. Plot a pixelated heat‐map of ξ_avg
+plt.figure(figsize=(8,6))
+pcm = plt.pcolormesh(
+    A_mesh, E_mesh, xi_grid,
+    shading='auto',           # avoids cell‐edge artifacts
+    cmap='viridis'            # perceptually uniform colormap
+)
+cbar = plt.colorbar(pcm, label=r'$\xi_{\rm avg}$ (ice-free fraction)')
+plt.xlabel(r'$a_{\rm moon}/r_{\rm Hill}$')
+plt.ylabel(r'$e_{\rm moon}$')
+plt.title('Continuous Habitability Fraction')
+plt.tight_layout()
+plt.show()
+
+# 4. (Optional) Overlay your discrete classification markers
+plt.figure(figsize=(8,6))
+plt.pcolormesh(A_mesh, E_mesh, xi_grid, shading='auto', cmap='viridis')
+for i in range(num_vals_a):
+    for j in range(num_vals_e):
+        plt.scatter(
+            A_frac[i], E_vals[j],
+            color=custom_colors[numeric_grid[i, j]],
+            marker='s', s=40, edgecolor='k'
+        )
+cbar = plt.colorbar(label=r'$\xi_{\rm avg}$')
+plt.xlabel(r'$a_{\rm moon}/r_{\rm Hill}$')
+plt.ylabel(r'$e_{\rm moon}$')
+plt.title('Habitability Fraction with Classification Overlay')
+plt.tight_layout()
+plt.show()
+
