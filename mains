@@ -641,8 +641,8 @@ ref_hill = get_hill_radius_default()
 
 min_frac = 0.05
 max_frac = 0.3
-num_vals_a = 4
-num_vals_e = 4
+num_vals_a = 10
+num_vals_e = 10
 
 
 a_moon_values = np.linspace(min_frac, max_frac, num_vals_a) * ref_hill
