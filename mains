@@ -33,7 +33,7 @@ T_profile = np.ones(N) * 323
 
 
 # --- Helper function for clipping (Numba-compatible) ---
-@njit(cache=True)
+@njit
 def clip_nb(a, a_min, a_max):
     if a < a_min:
         return a_min
@@ -43,7 +43,7 @@ def clip_nb(a, a_min, a_max):
         return a
 
 
-@njit(cache=True)
+@njit
 def trapz_nb(y, x):
     """
     Compute the integral of y with respect to x using the trapezoidal rule.
@@ -63,7 +63,7 @@ def trapz_nb(y, x):
     return result
 
 
-@njit(cache=True)
+@njit
 def atmospheric_heat_capacity(T_i, lat):
     """
     Compute the atmospheric heat capacity given a temperature T_i.
@@ -84,21 +84,21 @@ def atmospheric_heat_capacity(T_i, lat):
     return C
 
 
-@njit(cache=True)
+@njit
 def albedo_simple(T):
     return 0.525 - 0.245*np.tanh( ( T - 268) / 5)
 
-@njit(cache=True)
+@njit
 def tau_ir(T):
     return 0.79 * (T / 273) ** 3
 
-@njit(cache=True)
+@njit
 def infrared_simple(T):
     sig_sf = 5.670374419e-5
     tau_i = tau_ir(T)
     return sig_sf * T ** 4 / (1 + 0.75 * tau_i)
 
-@njit(cache=True)
+@njit
 def diffusion_simple(T, moon_center, star_center, epsilon, lat_value, lat, phi_m, phi_peri, n):
     """
     Calculate the diffusion constant D for heat transfer.
@@ -111,7 +111,7 @@ def diffusion_simple(T, moon_center, star_center, epsilon, lat_value, lat, phi_m
     return D
 
 
-@njit(cache=True)
+@njit
 def albedo_complex(T, moon_center, star_center, epsilon, lat_value, t, Pmoon, lat, phi_m):
     """
     Calculate the albedo based on temperature and geometric factors.
@@ -145,7 +145,7 @@ def albedo_complex(T, moon_center, star_center, epsilon, lat_value, t, Pmoon, la
     return a_s
 
 
-@njit(cache=True)
+@njit
 def Pressure_co2(T):
     """
     Determine the CO2 pressure based on temperature.
@@ -159,7 +159,7 @@ def Pressure_co2(T):
     return P_co2
 
 
-@njit(cache=True)
+@njit
 def mu_calc(moon_center, star_center, epsilon, lat_value, t, Pmoon, phi_m):
     """
     Calculate the cosine of the stellar zenith angle (mu) for the exomoon.
@@ -178,7 +178,7 @@ def mu_calc(moon_center, star_center, epsilon, lat_value, t, Pmoon, phi_m):
     return mu
 
 
-@njit(cache=True)
+@njit
 def mu_bar_stellar(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri):
     """
     Calculate the average stellar cosine incidence (mu_bar) for a given latitude.
@@ -200,7 +200,7 @@ def mu_bar_stellar(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri
     return mubar_timesH
 
 
-@njit(cache=True)
+@njit
 def mu_bar_diffuse(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri):
     """
     Calculate the diffuse average mu_bar for the exomoon.
@@ -222,7 +222,7 @@ def mu_bar_diffuse(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri
 
 
 
-@njit(cache=True)
+@njit
 def diffusion_complex(T, moon_center, star_center, epsilon, n, lat_value, phi_m, phi_peri):
     """
     Calculate the diffusion constant D for heat transfer.
@@ -237,7 +237,7 @@ def diffusion_complex(T, moon_center, star_center, epsilon, n, lat_value, phi_m,
     return D
 
 
-@njit(cache=True)
+@njit
 def transit(planet_center, moon_center, star_center, r_p):
     s = planet_center - moon_center
     s_s = star_center - moon_center
@@ -252,7 +252,7 @@ def transit(planet_center, moon_center, star_center, r_p):
         return False
 
 
-@njit(cache=True)
+@njit
 def transit_times(planet_center, moon_center, star_center, r_p):
     s = planet_center - moon_center
     s_s = star_center - moon_center
@@ -263,7 +263,7 @@ def transit_times(planet_center, moon_center, star_center, r_p):
     return d
 
 
-@njit(cache=True)
+@njit
 def stellar_insolation_flux(L, m_s, planet_center, moon_center, star_center, r_p, lat_value, epsilon, phi_m, phi_peri):
     """
     Calculate the stellar insolation flux on the moon's surface.
@@ -279,7 +279,7 @@ def stellar_insolation_flux(L, m_s, planet_center, moon_center, star_center, r_p
     return S
 
 
-@njit(cache=True)
+@njit
 def solve_T_d(T_star, ap, r_star, r, tol=1e-6, max_iter=50):
     # Initial guess near 300K
     T_d = 300.0
@@ -303,7 +303,7 @@ def solve_T_d(T_star, ap, r_star, r, tol=1e-6, max_iter=50):
 
 
 # Example usage within planetary_illumination:
-@njit(cache=True)
+@njit
 def planetary_illumination(moon_center, planet_center, star_center, r_star, a_moon, lat_value,
                            r_planet, m_star, t, t0, a_planet, e_planet, Pplanet, V_star):
 
@@ -333,7 +333,7 @@ def planetary_illumination(moon_center, planet_center, star_center, r_star, a_mo
 
 
 
-@njit(cache=True)
+@njit
 def infrared_complex(T):
     T_clipped = T
     #T_clipped = clip_nb(T, 190, 380)
@@ -362,7 +362,7 @@ def infrared_complex(T):
          - 9.255646e-9 * beta**4 * T_clipped**3)
     return I
 
-@njit(cache=True)
+@njit
 def tidal_heating_2(r_m, e_m, m_p, a_m):
   Q = 100
   k2 = 0.3
@@ -374,7 +374,7 @@ def tidal_heating_2(r_m, e_m, m_p, a_m):
 
 
 
-@njit(cache=True)
+@njit
 def tidal_heating(r_m, e_m, m_p, a_m):
     # 1) Calculate total heating rate in erg/s
     Q_m = 100
@@ -393,7 +393,7 @@ def tidal_heating(r_m, e_m, m_p, a_m):
 
 
 
-@njit(cache=True)
+@njit
 def main_sequence_luminosity(m_s):
     L_sun = 3.846e33
     L = L_sun * (m_s / Msun_to_g)**4
@@ -404,7 +404,7 @@ def main_sequence_luminosity(m_s):
 
 
 
-@njit(cache=True)
+@njit
 def EBM(L, lat, T, m_planet, a_moon, m_star, planet_center, moon_center, star_center,
         r_planet, delta_x, e_moon, dt, epsilon, t, Pmoon, r_star, t0,
         a_planet, e_planet, Pplanet, V_star, phi_m, phi_peri, n, r_moon):
