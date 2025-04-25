@@ -426,7 +426,7 @@ def EBM(L, lat, T, m_planet, a_moon, m_star, planet_center, moon_center, star_ce
         S_local = stellar_insolation_flux(L, m_star, planet_center, moon_center, star_center, r_planet, lat[i], epsilon, phi_m, phi_peri)
 
 
-        Sp_local = planetary_illumination(moon_center, planet_center, star_center, r_star, a_moon, lat[i], r_planet, m_star, t, t0, a_planet, e_planet, Pplanet, V_star)
+        #Sp_local = planetary_illumination(moon_center, planet_center, star_center, r_star, a_moon, lat[i], r_planet, m_star, t, t0, a_planet, e_planet, Pplanet, V_star)
 
         A_local = albedo_simple(T[i])
         #A_local = albedo_complex(T[i], moon_center, star_center, epsilon, lat[i], t, Pmoon, lat, phi_m)
@@ -436,7 +436,7 @@ def EBM(L, lat, T, m_planet, a_moon, m_star, planet_center, moon_center, star_ce
         tide_flux = tidal_heating(r_moon, e_moon, m_planet, a_moon)
         #A_local = 0
         #tide_flux = 0
-        #Sp_local = 0
+        Sp_local = 0
         T_new[i] = T[i] + (dt / C_local) * ((S_local + Sp_local) * (1 - A_local) - I_local + D_local * diffusion + tide_flux)
     T_new[0] = T_new[1]
     T_new[-1] = T_new[-2]
