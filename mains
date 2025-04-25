@@ -15,7 +15,7 @@ from scipy.optimize import fsolve
 import concurrent.futures
 from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
-from numba import njit, jit, objmode, prange
+from numba import njit, jit, objmode
 
 
 # Constants for unit conversion
@@ -33,7 +33,7 @@ T_profile = np.ones(N) * 323
 
 
 # --- Helper function for clipping (Numba-compatible) ---
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def clip_nb(a, a_min, a_max):
     if a < a_min:
         return a_min
@@ -43,7 +43,7 @@ def clip_nb(a, a_min, a_max):
         return a
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def trapz_nb(y, x):
     """
     Compute the integral of y with respect to x using the trapezoidal rule.
@@ -57,13 +57,13 @@ def trapz_nb(y, x):
     """
     n = len(x)
     result = 0.0
-    for i in prange(1, n):
+    for i in range(1, n):
         dx = x[i] - x[i-1]
         result += 0.5 * (y[i] + y[i-1]) * dx
     return result
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def atmospheric_heat_capacity(T_i, lat):
     """
     Compute the atmospheric heat capacity given a temperature T_i.
@@ -84,21 +84,21 @@ def atmospheric_heat_capacity(T_i, lat):
     return C
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def albedo_simple(T):
     return 0.525 - 0.245*np.tanh( ( T - 268) / 5)
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def tau_ir(T):
     return 0.79 * (T / 273) ** 3
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def infrared_simple(T):
     sig_sf = 5.670374419e-5
     tau_i = tau_ir(T)
     return sig_sf * T ** 4 / (1 + 0.75 * tau_i)
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def diffusion_simple(T, moon_center, star_center, epsilon, lat_value, lat, phi_m, phi_peri, n):
     """
     Calculate the diffusion constant D for heat transfer.
@@ -111,7 +111,7 @@ def diffusion_simple(T, moon_center, star_center, epsilon, lat_value, lat, phi_m
     return D
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def albedo_complex(T, moon_center, star_center, epsilon, lat_value, t, Pmoon, lat, phi_m):
     """
     Calculate the albedo based on temperature and geometric factors.
@@ -145,7 +145,7 @@ def albedo_complex(T, moon_center, star_center, epsilon, lat_value, t, Pmoon, la
     return a_s
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def Pressure_co2(T):
     """
     Determine the CO2 pressure based on temperature.
@@ -159,7 +159,7 @@ def Pressure_co2(T):
     return P_co2
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def mu_calc(moon_center, star_center, epsilon, lat_value, t, Pmoon, phi_m):
     """
     Calculate the cosine of the stellar zenith angle (mu) for the exomoon.
@@ -178,7 +178,7 @@ def mu_calc(moon_center, star_center, epsilon, lat_value, t, Pmoon, phi_m):
     return mu
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def mu_bar_stellar(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri):
     """
     Calculate the average stellar cosine incidence (mu_bar) for a given latitude.
@@ -200,7 +200,7 @@ def mu_bar_stellar(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri
     return mubar_timesH
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def mu_bar_diffuse(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri):
     """
     Calculate the diffuse average mu_bar for the exomoon.
@@ -222,7 +222,7 @@ def mu_bar_diffuse(moon_center, star_center, epsilon, lat_value, phi_m, phi_peri
 
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def diffusion_complex(T, moon_center, star_center, epsilon, n, lat_value, phi_m, phi_peri):
     """
     Calculate the diffusion constant D for heat transfer.
@@ -237,7 +237,7 @@ def diffusion_complex(T, moon_center, star_center, epsilon, n, lat_value, phi_m,
     return D
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def transit(planet_center, moon_center, star_center, r_p):
     s = planet_center - moon_center
     s_s = star_center - moon_center
@@ -252,7 +252,7 @@ def transit(planet_center, moon_center, star_center, r_p):
         return False
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def transit_times(planet_center, moon_center, star_center, r_p):
     s = planet_center - moon_center
     s_s = star_center - moon_center
@@ -263,7 +263,7 @@ def transit_times(planet_center, moon_center, star_center, r_p):
     return d
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def stellar_insolation_flux(L, m_s, planet_center, moon_center, star_center, r_p, lat_value, epsilon, phi_m, phi_peri):
     """
     Calculate the stellar insolation flux on the moon's surface.
@@ -279,12 +279,12 @@ def stellar_insolation_flux(L, m_s, planet_center, moon_center, star_center, r_p
     return S
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def solve_T_d(T_star, ap, r_star, r, tol=1e-6, max_iter=50):
     # Initial guess near 300K
     T_d = 300.0
 
-    for _ in prange(max_iter):
+    for _ in range(max_iter):
 
         # f(T_d) = T_d^4 + (T_d - 100)^4 - 2 * T_star^4 * ((1 - ap) * r_star^2 / r^2)
         f_val = T_d**4 + (T_d - 100)**4 - 2 * T_star**4 * ((1 - ap) * r_star**2 / r**2)
@@ -303,7 +303,7 @@ def solve_T_d(T_star, ap, r_star, r, tol=1e-6, max_iter=50):
 
 
 # Example usage within planetary_illumination:
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def planetary_illumination(moon_center, planet_center, star_center, r_star, a_moon, lat_value,
                            r_planet, m_star, t, t0, a_planet, e_planet, Pplanet, V_star):
 
@@ -333,7 +333,7 @@ def planetary_illumination(moon_center, planet_center, star_center, r_star, a_mo
 
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def infrared_complex(T):
     T_clipped = T
     #T_clipped = clip_nb(T, 190, 380)
@@ -362,7 +362,7 @@ def infrared_complex(T):
          - 9.255646e-9 * beta**4 * T_clipped**3)
     return I
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def tidal_heating_2(r_m, e_m, m_p, a_m):
   Q = 100
   k2 = 0.3
@@ -374,7 +374,7 @@ def tidal_heating_2(r_m, e_m, m_p, a_m):
 
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def tidal_heating(r_m, e_m, m_p, a_m):
     # 1) Calculate total heating rate in erg/s
     Q_m = 100
@@ -393,7 +393,7 @@ def tidal_heating(r_m, e_m, m_p, a_m):
 
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def main_sequence_luminosity(m_s):
     L_sun = 3.846e33
     L = L_sun * (m_s / Msun_to_g)**4
@@ -404,14 +404,14 @@ def main_sequence_luminosity(m_s):
 
 
 
-@njit(parallel=True, nogil=True, cache=True)
+@njit(cache=True)
 def EBM(L, lat, T, m_planet, a_moon, m_star, planet_center, moon_center, star_center,
         r_planet, delta_x, e_moon, dt, epsilon, t, Pmoon, r_star, t0,
         a_planet, e_planet, Pplanet, V_star, phi_m, phi_peri, n, r_moon):
     N = len(lat)
     x = np.sin(lat)
     T_new = T.copy()
-    for i in prange(1, N-1):
+    for i in range(1, N-1):
         dTdx_ip = (T[i+1] - T[i]) / delta_x
         dTdx_im = (T[i] - T[i-1]) / delta_x
         x_ip_half = 0.5 * (x[i+1] + x[i])
@@ -528,9 +528,9 @@ def run_simulation(time_yr, a_moon_input, e_moon_input):
 
 
         #
-        C_array = np.array([atmospheric_heat_capacity(T_current[i], lat) for i in prange(N)])
-        D_array = np.array([diffusion_simple(T_current[i], moon_center, star_center, epsilon, lat[i], lat, phi_m, phi_peri, n) for i in prange(N)])
-        #D_array = np.array([diffusion_complex(T_current[i], moon_center, star_center, epsilon, n, lat[i], phi_m, phi_peri) for i in prange(N)])
+        C_array = np.array([atmospheric_heat_capacity(T_current[i], lat) for i in range(N)])
+        D_array = np.array([diffusion_simple(T_current[i], moon_center, star_center, epsilon, lat[i], lat, phi_m, phi_peri, n) for i in range(N)])
+        #D_array = np.array([diffusion_complex(T_current[i], moon_center, star_center, epsilon, n, lat[i], phi_m, phi_peri) for i in range(N)])
 
         dt_max = np.min((delta_x**2 * C_array) / (2 * D_array * (1 - x**2) + 1e-10))
         #if transit(planet_center, moon_center, star_center, r_planet):
@@ -579,7 +579,7 @@ def run_simulation(time_yr, a_moon_input, e_moon_input):
 
     j_profiles = np.where((T_profiles > 273) & (T_profiles < 373), 1, 0)
     weights = np.cos(lat)
-    j_time = np.array([0.5 * np.trapezoid(j_profiles[i, :] * weights, lat) for i in prange(j_profiles.shape[0])])
+    j_time = np.array([0.5 * np.trapezoid(j_profiles[i, :] * weights, lat) for i in range(j_profiles.shape[0])])
 
     times_years = times_arr / YEAR_to_s
     final_10_years = time_yr / 10
@@ -587,7 +587,7 @@ def run_simulation(time_yr, a_moon_input, e_moon_input):
     xi_avg = np.mean(j_time[final_indices])
     xi_std = np.std(j_time[final_indices], ddof=1)
 
-    T_lat_avg = np.array([np.trapezoid(T_profiles[i, :] * weights, lat) / 2 for i in prange(T_profiles.shape[0])])
+    T_lat_avg = np.array([np.trapezoid(T_profiles[i, :] * weights, lat) / 2 for i in range(T_profiles.shape[0])])
     T_avg = np.mean(T_lat_avg[final_indices])
     T_avg_list = []
     T_avg_list.append(T_avg)
@@ -647,8 +647,8 @@ def simulation_job(params):
 
 
 param_list = []
-for i in prange(num_vals_a):
-    for j in prange(num_vals_e):
+for i in range(num_vals_a):
+    for j in range(num_vals_e):
         param_list.append((i, j, a_moon_values[i], e_moon_values[j]))
 
 
@@ -671,8 +671,8 @@ custom_colors = ['green', 'grey', 'red', 'blue', 'black']
 
 plt.figure(figsize=(8,6))
 # Use the correct dimension variables for the grid
-for i in prange(num_vals_a):
-    for j in prange(num_vals_e):
+for i in range(num_vals_a):
+    for j in range(num_vals_e):
         x_val = a_moon_fraction[i]
         y_val = e_moon_values[j]
         color_val = custom_colors[numeric_grid[i, j]]
@@ -715,8 +715,8 @@ plt.show()
 # 4. (Optional) Overlay your discrete classification markers
 plt.figure(figsize=(8,6))
 plt.pcolormesh(A_mesh, E_mesh, xi_grid, shading='auto', cmap='viridis')
-for i in prange(num_vals_a):
-    for j in prange(num_vals_e):
+for i in range(num_vals_a):
+    for j in range(num_vals_e):
         plt.scatter(
             A_frac[i], E_vals[j],
             color=custom_colors[numeric_grid[i, j]],
